@@ -1,3 +1,2 @@
 police_data.csv filter=lfs diff=lfs merge=lfs -text
 police_data_trim.csv filter=lfs diff=lfs merge=lfs -text
-police_data_clean.csv filter=lfs diff=lfs merge=lfs -text

@@ -127,8 +127,8 @@
          * and a few other references that are cited as they appear.
         */
 
-        // establish csv and geojson as const so i don't need to change multiple mentions
-        const CSV = "police_data_clean.csv";
+        // one csv per year so no single file exceeds github's 100mb limit
+        const CSV_YEARS = ["2018","2019","2020","2021","2022","2023","2024","2025","2026"];
         const GEOJSON = "sf_neighborhoods.geojson";
 
         // establish captions as const so i don't need to search for them to change them
@@ -237,9 +237,11 @@
 
         // load data once and use it across all stages
         Promise.all([
-            d3.csv(CSV),
+            ...CSV_YEARS.map(y => d3.csv(`police_data_${y}.csv`)),
             d3.json(GEOJSON)
-        ]).then(([csvData, geo]) => {
+        ]).then((results) => {
+            const csvData = results.slice(0, -1).flat();
+            const geo = results[results.length - 1];
 
             // GeeksForGeeks page on geoMercator() used as reference: https://www.geeksforgeeks.org/javascript/d3-js-geomercator-function/
             const projection = d3.geoMercator()
