@@ -44,91 +44,202 @@
             font-weight: bold;
             fill: #222;
         }
+
+        #stage {
+            position: relative;
+        }
+
+        #narration {
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            text-align: center;
+            pointer-events: none;
+        }
+
+        #narration h1 {
+            font-size: 56px;
+            margin: 0;
+        }
+
+        #controls {
+            text-align: center;
+            margin-top: 20px;
+        }
+
+        #controls button {
+            font-size: 22px;
+            padding: 14px 36px;
+        }
+
+        #subgraph {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: white;
+            border: 1px solid #888;
+            padding: 0;
+            z-index: 10;
+            width: 700px;
+            min-width: 250px;
+            resize: horizontal;
+            overflow: hidden;
+        }
+
+        #subgraph-handle {
+            cursor: move;
+            padding: 8px;
+            background: #f0f0f0;
+            border-bottom: 1px solid #ddd;
+        }
+
+        #subgraph img {
+            display: block;
+            width: 100%;
+        }
     </style>
 </head>
 <body>
-    <h1>
-        SF Crime on the Map
-    </h1>
-    <h2>
-        by Pika Macchi
-    </h2>
-    
-    This project will tell an expanded story of the crime in San Francisco, giving a deeper insight into the breakdown of what exactly happens, and how it varies.
-
-    <h2>
-        Choropleth Map
-    </h2>
-    <div id="choropleth-container" class="map-wrapper"></div>
-
-    <h2>
-        Bubble Map
-    </h2>
-    <div id="bubble-container" class="map-wrapper"></div>
-
-    <h2>
-        Line Graph of Top 5 Crimes over Time in the Tenderloin
-    </h2>
-    <img src="images/linegraphTableau.png">
-
-    <h2>
-        Treemap Showing Greater Breakdown of Crime Types
-    </h2>
-    <img src="images/treemapBreakdown.png">
+    <div id="stage">
+        <div id="narration"></div>
+        <div id="subgraph" hidden>
+            <div id="subgraph-handle">
+                <button id="subgraph-close">Close</button>
+            </div>
+            <img id="subgraph-image">
+        </div>
+    </div>
+    <div id="caption"></div>
+    <div id="controls"></div>
 
     <script>
-        /** 
-         * Code written originally using D3 observable example library,
+        /**
+         * D3 code written originally using D3 observable example library,
          * assignment A9,
          * D3 documentation on new concepts,
          * and a few other references that are cited as they appear.
         */
 
         // establish csv and geojson as const so i don't need to change multiple mentions
-        const CSV = "police_data_trim_2.csv";
+        const CSV = "police_data_clean.csv";
         const GEOJSON = "sf_neighborhoods.geojson";
 
-        // CHOROPLETH MAP
+        // establish captions as const so i don't need to search for them to change them
+        const captions = {
+            bubblePrompt: "Click on a year to isolate it, or the highlighted neighborhood to see the changes in crime levels.",
+            choroPrompt: "Click on the tenderloin for a more detailed breakdown.",
+            bubbleByYear: {
+                all:    "When people talk about crime in San Francisco, they usually jump right to the Tenderloin (highlighted in this chart), but it's actually number <b>two</b> overall. There have been more police incidents in <i>The Mission</i> since 2018.",
+                "2020": "The spread of COVID-19 causes a sudden drop in the amount of incidents as people are forced to stay inside.",
+                "2026": "At the time of writing this, this dataset only reaches until March 2026, so this year is mostly incomplete."
+            },
+            bubbleDefault:   "Generally, the notion holds true that downtown areas have more crime, as a result of many factors.",
+            bubbleSubgraph:     "This graph makes it even more clear how much crime dropped as a result of COVID, and also shows that the #2 crime alternates between <i>Assault</i> and <i>Other Miscellaneous</i>.<br>Did you expect burglary to be the most common crime in the Tenderloin? Click <b>Continue</b> to see what it is elsewhere.",
+            choropleth:      "Actually, <i>every neighborhood</i> in SF has the same #1 crime by frequency! Everywhere from the heart of downtown to the outer edges all share the same most frequent incident type.",
+            choroplethSubgraph: "Looking at the treemap shows a more detailed breakdown-- including, as most would expect, that reports of drug use are quite high in the Tenderloin."
+        };
+
+        // set up shared svg
+        const svg_width = 980;
+        const svg_height = 560;
+        const legend_width = 230;
+        const map_width = svg_width - legend_width;
+
+        const svg = d3.select("#stage").append("svg")
+            .attr("viewBox", [0, 0, svg_width, svg_height]);
+
+        // zoomable container holds map content; uiLayer stays fixed for title and legend
+        // d3 examples used as reference
+        const zoomLayer = svg.append("g").attr("class", "zoom-layer");
+        const baseLayer = zoomLayer.append("g").attr("class", "base-layer");
+        const dataLayer = zoomLayer.append("g").attr("class", "data-layer");
+        const overlayLayer = zoomLayer.append("g").attr("class", "overlay-layer");
+        const uiLayer = svg.append("g").attr("class", "ui-layer");
+
+        // pan and zoom behavior, applied to the zoom layer so ui stays put
+        const zoom = d3.zoom()
+            .scaleExtent([1, 8])
+            .translateExtent([[0, 0], [svg_width, svg_height]])
+            .on("zoom", (event) => zoomLayer.attr("transform", event.transform));
+        svg.call(zoom);
+
+        // grab containers for stage-specific text and buttons
+        const narration = d3.select("#narration");
+        const caption = d3.select("#caption");
+        const controls = d3.select("#controls");
+
+        // subgraph helpers for the click-through visualizations
+        const subgraph = d3.select("#subgraph");
+        const subgraphEl = subgraph.node();
+        const subgraphImage = d3.select("#subgraph-image");
+        const stageEl = d3.select("#stage").node();
+        d3.select("#subgraph-close").on("click", closeSubgraph);
+
+        // load and store captions for opening subgraph
+        let savedCaption = null;
+        function openSubgraph(src, subgraphCaptionHtml) {
+            subgraphImage.attr("src", src);
+            subgraph.attr("hidden", null);
+            if (subgraphCaptionHtml !== undefined) {
+                savedCaption = caption.html();
+                caption.html(subgraphCaptionHtml);
+            }
+        }
+
+        function closeSubgraph() {
+            subgraph.attr("hidden", "");
+            subgraphImage.attr("src", null);
+            subgraphEl.style.left = "";
+            subgraphEl.style.top = "";
+            subgraphEl.style.transform = "";
+            subgraphEl.style.width = "";
+            subgraphEl.style.height = "";
+            // put back the caption from before
+            if (savedCaption !== null) {
+                caption.html(savedCaption);
+                savedCaption = null;
+            }
+        }
+
+        // drag the subgraph by its handle bar
+        // StackOverflow page as used reference: https://stackoverflow.com/questions/64596035/how-to-use-d3-js-drag-properly
+        let subgraphDragStart = null;
+        const subgraphDrag = d3.drag()
+            .on("start", (event) => {
+                const subgraphRect = subgraphEl.getBoundingClientRect();
+                const stageRect = stageEl.getBoundingClientRect();
+                const startLeft = subgraphRect.left - stageRect.left;
+                const startTop = subgraphRect.top - stageRect.top;
+                subgraphEl.style.left = startLeft + "px";
+                subgraphEl.style.top = startTop + "px";
+                subgraphEl.style.transform = "none";
+                subgraphDragStart = {
+                    mouseX: event.sourceEvent.clientX,
+                    mouseY: event.sourceEvent.clientY,
+                    left: startLeft,
+                    top: startTop
+                };
+            })
+            .on("drag", (event) => {
+                if (!subgraphDragStart) return;
+                subgraphEl.style.left = (subgraphDragStart.left + event.sourceEvent.clientX - subgraphDragStart.mouseX) + "px";
+                subgraphEl.style.top = (subgraphDragStart.top + event.sourceEvent.clientY - subgraphDragStart.mouseY) + "px";
+            });
+        d3.select("#subgraph-handle").call(subgraphDrag);
+        // end citation
+
+        // load data once and use it across all stages
         Promise.all([
             d3.csv(CSV),
             d3.json(GEOJSON)
         ]).then(([csvData, geo]) => {
-            
-            // read and process data
-
-            // clean data: remove any rows with no data in the neighborhood or incident category
-            // made referencing D3 documentation on selecting and filter()
-            const validRows = csvData.filter(d =>
-                d["Analysis Neighborhood"] && d["Analysis Neighborhood"].trim() !== "" &&
-                d["Incident Category"]     && d["Incident Category"].trim()     !== ""
-            );
-
-            // rollup to get most frequent crime for each neighborhood
-            // GeeksForGeeks page on Rollup() used as reference: https://www.geeksforgeeks.org/javascript/d3-js-rollup-method/
-            const topCrimeByNeighborhood = d3.rollup(
-                validRows,
-                rows => {
-                    const counts = d3.rollup(rows, v => v.length, d => d["Incident Category"].trim());
-                    return [...counts.entries()].sort((a, b) => b[1] - a[1])[0][0];
-                },
-                d => d["Analysis Neighborhood"].trim()
-            );
-
-            const topCategories = [...new Set(topCrimeByNeighborhood.values())].sort();
-            // end citation
-
-            // define color scale
-            const colorScale = d3.scaleOrdinal(d3.schemeTableau10)
-                .domain(topCategories);
-
-            // set up svg
-            const svg_width = 980; 
-            const svg_height = 560;
-            const legend_width = 230;
-            const map_width = svg_width - legend_width;
-
-            const svg = d3.select("#choropleth-container").append("svg")
-                .attr("viewBox", [0, 0, svg_width, svg_height]);
 
             // GeeksForGeeks page on geoMercator() used as reference: https://www.geeksforgeeks.org/javascript/d3-js-geomercator-function/
             const projection = d3.geoMercator()
@@ -137,172 +248,295 @@
             const path = d3.geoPath().projection(projection);
             // end citation
 
-            // draw neighborhoods
-            svg.append("g")
-                .selectAll("path")
-                .data(geo.features)
-                .join("path")
-                .attr("class", "neighborhood")
-                .attr("d", path)
-                .attr("fill", d => {
-                    const name  = d.properties.nhood;
-                    const crime = topCrimeByNeighborhood.get(name);
-                    return crime ? colorScale(crime) : "#cccccc";
-                })
-                .attr("stroke", "#ffffff")
-                .attr("stroke-width", "1px")
-
-            // title
-            svg.append("text")
-                .attr("class", "map-title")
-                .attr("x", map_width / 2)
-                .attr("y", 22)
-                .attr("text-anchor", "middle")
-                .text("Most Common Crime Type by Neighborhood");
-
-
-            // legend
-            svg.append("g")
-                .attr("class", "legendOrdinal")
-                .attr("transform", `translate(${map_width + 10}, 45)`);
-
-            const choroplethLegend = d3.legendColor()
-                .title("Most Common Crime")
-                .titleWidth(legend_width - 10)
-                .scale(colorScale)
-                .shapeWidth(14)
-                .shapeHeight(14)
-                .shapePadding(4)
-                .labelOffset(6);
-
-            svg.select(".legendOrdinal").call(choroplethLegend);
-
-        });
-
-        // BUBBLE MAP
-        Promise.all([
-            d3.csv(CSV),
-            d3.json(GEOJSON)
-        ]).then(([csvData, geo]) => {
-
-            // read and process data
+            // clean data: remove any rows with no data in the neighborhood or incident category
+            // made referencing D3 documentation on selecting and filter()
             const validRows = csvData.filter(d =>
-                d["Analysis Neighborhood"] && d["Analysis Neighborhood"].trim() !== ""
+                d["Analysis Neighborhood"] && d["Analysis Neighborhood"].trim() !== "" &&
+                d["Incident Category"]     && d["Incident Category"].trim()     !== ""
             );
 
-            // rollup data and get incident count
-            const countByNeighborhood = d3.rollup(
+            // precompute year-by-neighborhood counts so each year uses the same bubble scale
+            const yearByNeighborhood = d3.rollup(
                 validRows,
                 v => v.length,
+                d => d["Incident Year"],
                 d => d["Analysis Neighborhood"].trim()
             );
+            const yearCounts = [...yearByNeighborhood.values()].flatMap(m => [...m.values()]);
+            const yearScaleMin = d3.min(yearCounts);
+            const yearScaleMax = d3.max(yearCounts);
 
-            // set up svg
-            const svg_width = 980, svg_height = 560;
-            const legend_width = 160;
-            const map_width = svg_width - legend_width;
-
-            const svg = d3.select("#bubble-container").append("svg")
-                .attr("viewBox", [0, 0, svg_width, svg_height]);
-
-            const projection = d3.geoMercator()
-                .fitExtent([[10, 45], [map_width - 10, svg_height - 20]], geo);
-
-            const path = d3.geoPath().projection(projection);
-
-            // draw neighborhoods
-            svg.append("g")
-                .selectAll("path")
+            // draw the base neighborhood polygons once so they persist across stages
+            baseLayer.selectAll("path")
                 .data(geo.features)
                 .join("path")
                 .attr("class", "neighborhood-bg")
                 .attr("d", path);
 
-           
-            // make entry for each geojson area using centroid
-            // made using GitHub example project of centroids used for countries by Curran Kelleher: https://gist.github.com/curran/55d327542393530662c3
-            const minCount = d3.min([...countByNeighborhood.values()]);
-            const maxCount = d3.max([...countByNeighborhood.values()]);
+            // WHICH STAGE LAYER
+            // handle the layers of data separately to allow the interaction
 
-            const rScale = d3.scaleSqrt()
-                .domain([0, maxCount])
-                .range([0, 30]);
+            // wipes per-stage layers and dispatches to the right render function
+            function setStage(name) {
+                dataLayer.selectAll("*").remove();
+                overlayLayer.selectAll("*").remove();
+                uiLayer.selectAll("*").remove();
+                narration.html("");
+                caption.text("");
+                controls.html("");
+                closeSubgraph();
+                // reset pan/zoom on stage change
+                svg.call(zoom.transform, d3.zoomIdentity);
+                if (name === "title")      showTitle();
+                if (name === "bubble")     showBubble();
+                if (name === "choropleth") showChoropleth();
+            }
 
-            const bubbleColorScale = d3.scaleSequential(d3.interpolateYlOrRd)
-                .domain([0, maxCount]);
+            // STAGE: TITLE
+            function showTitle() {
+                narration.html(`
+                    <h1>SF Crime on the Map</h1>
+                    <h2>by Pika Macchi</h2>
+                    <p>Lots of people <i>think</i> they know a lot about crime in San Francisco, but politically motivated propaganda and a lack of boots-on-the-ground experience means a lot of people don't know as much as they think.
+                        <br>This project will tell an expanded story of the crime in San Francisco, giving a deeper insight into the breakdown of what exactly happens, and how it varies.</p>
+                `);
+                controls.append("button")
+                    .text("Begin")
+                    .on("click", () => setStage("bubble"));
+            }
 
-            const bubbleData = geo.features
-                .map(feature => {
-                    const name     = feature.properties.nhood;
-                    const count    = countByNeighborhood.get(name) || 0;
-                    const centroid = path.centroid(feature);
-                    return { name, count, centroid };
-                })
-                .filter(d => d.count > 0 && isFinite(d.centroid[0]) && isFinite(d.centroid[1]));
-            //end citation
+            // STAGE: BUBBLE MAP
+            function showBubble(year) {
+                if (!year) year = "all";
 
-            // sort bubbles to draw largest ones first
-            bubbleData.sort((a, b) => b.count - a.count);
+                // check for specific commentary
+                const yearMessage = captions.bubbleByYear[year] || captions.bubbleDefault;
+                const captionHtml = `
+                    <p>${yearMessage}</p>
+                    <p>${captions.bubblePrompt}</p>
+                `;
+                if (subgraph.attr("hidden") === null) {
+                    savedCaption = captionHtml;
+                } else {
+                    caption.html(captionHtml);
+                }
 
-            // draw bubbles
-            svg.append("g")
-                .selectAll("circle")
-                .data(bubbleData)
-                .join("circle")
-                .attr("class", "bubble")
-                .attr("cx",    d => d.centroid[0])
-                .attr("cy",    d => d.centroid[1])
-                .attr("r",     d => rScale(d.count))
-                .attr("fill",  d => bubbleColorScale(d.count))
-                .attr("fill-opacity", 0.78)
-                .attr("stroke", d => d3.color(bubbleColorScale(d.count)).darker(0.6))
-                .attr("stroke-width", "0.8px")
+                // filter by year
+                const yearRows = year === "all"
+                    ? validRows
+                    : validRows.filter(d => d["Incident Year"] === year);
 
-            // title
-            svg.append("text")
-                .attr("class", "map-title")
-                .attr("x", map_width / 2)
-                .attr("y", 22)
-                .attr("text-anchor", "middle")
-                .text("Total Crime Incidents by Neighborhood");
+                // rollup data and get incident count
+                const countByNeighborhood = d3.rollup(
+                    yearRows,
+                    v => v.length,
+                    d => d["Analysis Neighborhood"].trim()
+                );
 
-            // legend 
-            const legendG = svg.append("g")
-                .attr("transform", `translate(${map_width + 10}, 50)`);
+                // make entry for each geojson area using centroid
+                // made using GitHub example project of centroids used for countries by Curran Kelleher: https://gist.github.com/curran/55d327542393530662c3
+                // get separate ranges for year vs all
+                const minCount = year === "all" ? d3.min([...countByNeighborhood.values()]) : yearScaleMin;
+                const maxCount = year === "all" ? d3.max([...countByNeighborhood.values()]) : yearScaleMax;
 
-            legendG.append("text")
-                .attr("class", "legendTitle")
-                .attr("y", 0)
-                .text("Incident Count");
+                const rScale = d3.scaleSqrt()
+                    .domain([0, maxCount])
+                    .range([0, 30]);
 
-            const legendValues = [
-                minCount,
-                Math.round(minCount + maxCount / 2),
-                maxCount
-            ];
+                const bubbleColorScale = d3.scaleSequential(d3.interpolateYlOrRd)
+                    .domain([0, maxCount]);
 
-            let y_offset = 18;
-            legendValues.forEach(val => {
-                const r = rScale(val);
-                legendG.append("circle")
-                    .attr("cx", 26)
-                    .attr("cy", y_offset + r)
-                    .attr("r", r)
-                    .attr("fill", bubbleColorScale(val))
+                const bubbleData = geo.features
+                    .map(feature => {
+                        const name     = feature.properties.nhood;
+                        const count    = countByNeighborhood.get(name) || 0;
+                        const centroid = path.centroid(feature);
+                        return { name, count, centroid };
+                    })
+                    .filter(d => d.count > 0 && isFinite(d.centroid[0]) && isFinite(d.centroid[1]));
+                // end citation
+
+                // sort bubbles to draw largest ones first
+                bubbleData.sort((a, b) => b.count - a.count);
+
+                // wipe layers before drawing
+                dataLayer.selectAll("*").remove();
+                overlayLayer.selectAll("*").remove();
+                uiLayer.selectAll("*").remove();
+
+                // draw bubbles
+                dataLayer.append("g")
+                    .selectAll("circle")
+                    .data(bubbleData)
+                    .join("circle")
+                    .attr("class", "bubble")
+                    .attr("cx",    d => d.centroid[0])
+                    .attr("cy",    d => d.centroid[1])
+                    .attr("r",     d => rScale(d.count))
+                    .attr("fill",  d => bubbleColorScale(d.count))
                     .attr("fill-opacity", 0.78)
-                    .attr("stroke", d3.color(bubbleColorScale(val)).darker(0.6))
+                    .attr("stroke", d => d3.color(bubbleColorScale(d.count)).darker(0.6))
                     .attr("stroke-width", "0.8px");
 
+                // title
+                uiLayer.append("text")
+                    .attr("class", "map-title")
+                    .attr("x", map_width / 2)
+                    .attr("y", 22)
+                    .attr("text-anchor", "middle")
+                    .text("Total Crime Incidents by Neighborhood");
+
+                // legend
+                const legendG = uiLayer.append("g")
+                    .attr("transform", `translate(${map_width + 10}, 50)`);
+
                 legendG.append("text")
-                    .attr("class", "label")
-                    .attr("x", 56)
-                    .attr("y", y_offset + r + 4)
-                    .text(val.toLocaleString());
+                    .attr("class", "legendTitle")
+                    .attr("y", 0)
+                    .text("Incident Count");
 
-                // increase vertical offset for each circle so they don't overlap
-                y_offset += r * 2 + 14;
-            });
+                const legendValues = [
+                    minCount,
+                    Math.round(minCount + maxCount / 2),
+                    maxCount
+                ];
 
+                let y_offset = 18;
+                legendValues.forEach(val => {
+                    const r = rScale(val);
+                    legendG.append("circle")
+                        .attr("cx", 26)
+                        .attr("cy", y_offset + r)
+                        .attr("r", r)
+                        .attr("fill", bubbleColorScale(val))
+                        .attr("fill-opacity", 0.78)
+                        .attr("stroke", d3.color(bubbleColorScale(val)).darker(0.6))
+                        .attr("stroke-width", "0.8px");
+
+                    legendG.append("text")
+                        .attr("class", "label")
+                        .attr("x", 56)
+                        .attr("y", y_offset + r + 4)
+                        .text(val.toLocaleString());
+
+                    // increase vertical offset for each circle so they don't overlap
+                    y_offset += r * 2 + 14;
+                });
+
+                // highlight tenderloin
+                const tenderloin = geo.features.find(f => f.properties.nhood === "Tenderloin");
+                if (tenderloin) {
+                    overlayLayer.append("path")
+                        .datum(tenderloin)
+                        .attr("d", path)
+                        .attr("fill", "#ff3366")
+                        .attr("fill-opacity", 0.25)
+                        .attr("stroke", "#ff3366")
+                        .attr("stroke-width", "3px")
+                        .style("cursor", "pointer")
+                        .on("click", () => openSubgraph("images/linegraphTableau.png", `<p>${captions.bubbleSubgraph}</p>`));
+                }
+
+                // year buttons and continue button
+                controls.html("");
+                const years = ["all", "2018", "2019", "2020", "2021", "2022", "2023", "2024", "2025", "2026"];
+                years.forEach(y => {
+                    controls.append("button")
+                        .text(y === "all" ? "All" : y)
+                        .on("click", () => showBubble(y));
+                });
+                controls.append("button")
+                    .text("Continue")
+                    .on("click", () => setStage("choropleth"));
+            }
+
+            // STAGE: CHOROPLETH
+            function showChoropleth() {
+                caption.html(`
+                    <p>${captions.choropleth}</p>
+                    <p>${captions.choroPrompt}</p>
+                `);
+
+                // rollup to get most frequent crime for each neighborhood
+                // GeeksForGeeks page on Rollup() used as reference: https://www.geeksforgeeks.org/javascript/d3-js-rollup-method/
+                const topCrimeByNeighborhood = d3.rollup(
+                    validRows,
+                    rows => {
+                        const counts = d3.rollup(rows, v => v.length, d => d["Incident Category"].trim());
+                        return [...counts.entries()].sort((a, b) => b[1] - a[1])[0][0];
+                    },
+                    d => d["Analysis Neighborhood"].trim()
+                );
+
+                const topCategories = [...new Set(topCrimeByNeighborhood.values())].sort();
+                // end citation
+
+                // define color scale
+                const colorScale = d3.scaleOrdinal(d3.schemeTableau10)
+                    .domain(topCategories);
+
+                // draw neighborhoods colored by top crime
+                dataLayer.append("g")
+                    .selectAll("path")
+                    .data(geo.features)
+                    .join("path")
+                    .attr("class", "neighborhood")
+                    .attr("d", path)
+                    .attr("fill", d => {
+                        const name  = d.properties.nhood;
+                        const crime = topCrimeByNeighborhood.get(name);
+                        return crime ? colorScale(crime) : "#cccccc";
+                    })
+                    .attr("stroke", "#ffffff")
+                    .attr("stroke-width", "1px");
+
+                // title
+                uiLayer.append("text")
+                    .attr("class", "map-title")
+                    .attr("x", map_width / 2)
+                    .attr("y", 22)
+                    .attr("text-anchor", "middle")
+                    .text("Most Common Crime Type by Neighborhood");
+
+                // legend
+                uiLayer.append("g")
+                    .attr("class", "legendOrdinal")
+                    .attr("transform", `translate(${map_width + 10}, 45)`);
+
+                const choroplethLegend = d3.legendColor()
+                    .title("Most Common Crime")
+                    .titleWidth(legend_width - 10)
+                    .scale(colorScale)
+                    .shapeWidth(14)
+                    .shapeHeight(14)
+                    .shapePadding(4)
+                    .labelOffset(6);
+
+                uiLayer.select(".legendOrdinal").call(choroplethLegend);
+
+                // outline + fill the tenderloin so the whole area is clickable for the treemap
+                const tenderloin = geo.features.find(f => f.properties.nhood === "Tenderloin");
+                if (tenderloin) {
+                    overlayLayer.append("path")
+                        .datum(tenderloin)
+                        .attr("d", path)
+                        .attr("fill", "#ff3366")
+                        .attr("fill-opacity", 0.25)
+                        .attr("stroke", "#ff3366")
+                        .attr("stroke-width", "3px")
+                        .style("cursor", "pointer")
+                        .on("click", () => openSubgraph("images/treemapBreakdown.png", `<p>${captions.choroplethSubgraph}</p>`));
+                }
+
+                // back button to return to the bubble map
+                controls.html("");
+                controls.append("button")
+                    .text("Back")
+                    .on("click", () => setStage("bubble"));
+            }
+
+            // start at the title screen
+            setStage("title");
         });
 
     </script>
