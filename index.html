@@ -5,6 +5,10 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>SF Crime on the Map</title>
 
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Climate+Crisis&family=IBM+Plex+Sans:ital,wght@0,400;0,700;1,400&display=swap" rel="stylesheet">
+
     <script src="https://d3js.org/d3.v7.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/topojson/3.0.2/topojson.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/d3-legend/2.25.6/d3-legend.min.js"></script>
@@ -13,19 +17,36 @@
         body, html {
             margin: 0;
             padding: 0;
-            font-family: Arial, sans-serif;
+            min-height: 100vh;
+            font-family: 'IBM Plex Sans', sans-serif;
             background-color: #f9f9f9;
         }
 
         svg {
             width: 100%;
+            max-height: 75vh;
             display: block;
         }
 
+        #tooltip {
+            position: fixed;
+            z-index: 100;
+            background: rgba(0,0,0,0.72);
+            color: white;
+            font-size: 12px;
+            padding: 4px 8px;
+            pointer-events: none;
+            display: none;
+        }
+
         .neighborhood-bg {
-            fill: #e8ecf0;
+            fill: #c8d0d9;
             stroke: #fff;
             stroke-width: 0.8px;
+        }
+
+        body.stage-bubble .neighborhood-bg {
+            fill: #d9c8c8;
         }
 
         .legendTitle {
@@ -40,13 +61,15 @@
         }
 
         .map-title {
-            font-size: 17px;
+            font-size: 24px;
             font-weight: bold;
             fill: #222;
         }
 
         #stage {
             position: relative;
+            width: 100%;
+            margin: 0 auto;
         }
 
         #narration {
@@ -64,6 +87,7 @@
         }
 
         #narration h1 {
+            font-family: 'Climate Crisis', sans-serif;
             font-size: 56px;
             margin: 0;
         }
@@ -76,6 +100,18 @@
         #controls button {
             font-size: 22px;
             padding: 14px 36px;
+            border-radius: 6px;
+        }
+
+        #controls .label {
+            font-size: 14px;
+        }
+
+        #caption {
+            text-align: center;
+            width: 60%;
+            margin: 8px auto 0;
+            font-size: 24px;
         }
 
         #subgraph {
@@ -104,16 +140,91 @@
             display: block;
             width: 100%;
         }
+
+        /* custom styling for year scroller. Medium article on js styling used as reference: https://javascript.plainenglish.io/css-range-sliders-transform-the-default-into-beautiful-ui-541f0f78e0bc */
+        #year-scrubber {
+            -webkit-appearance: none;
+            appearance: none;
+            height: 6px;
+            border-radius: 3px;
+            outline: none;
+            cursor: pointer;
+        }
+        #year-scrubber::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            appearance: none;
+            width: 16px;
+            height: 16px;
+            border-radius: 50%;
+            cursor: pointer;
+        }
+        #year-scrubber::-moz-range-thumb {
+            width: 16px;
+            height: 16px;
+            border-radius: 50%;
+            border: none;
+            cursor: pointer;
+        }
+        /* end citation */
+
+        /* a lot of specific color palette setting for elements within the charts */
+        body.stage-bubble {
+            background-color: #ffeded;
+        }
+        body.stage-bubble #stage > svg .map-title,
+        body.stage-bubble #stage > svg .label,
+        body.stage-bubble #stage > svg .legendTitle {
+            fill: #1f0202;
+        }
+        body.stage-bubble #caption {
+            color: #1f0202;
+        }
+        body.stage-bubble #controls .label {
+            color: #1f0202;
+        }
+        body.stage-bubble #controls button {
+            color: #1f0202;
+            border: 1px solid #1f0202;
+            background: transparent;
+        }
+        body.stage-bubble #year-scrubber {
+            background: white;
+            border: 1px solid #1f0202;
+        }
+        body.stage-bubble #year-scrubber::-webkit-slider-thumb {
+            background: #1f0202;
+        }
+        body.stage-bubble #year-scrubber::-moz-range-thumb {
+            background: #1f0202;
+        }
+
+        body.stage-choropleth {
+            background-color: #edf4ff;
+        }
+        body.stage-choropleth #stage > svg .map-title,
+        body.stage-choropleth #stage > svg .label,
+        body.stage-choropleth #stage > svg .legendTitle {
+            fill: #051630;
+        }
+        body.stage-choropleth #caption {
+            color: #051630;
+        }
+        body.stage-choropleth #controls button {
+            color: #051630;
+            border: 1px solid #051630;
+            background: transparent;
+        }
     </style>
 </head>
 <body>
+    <div id="tooltip"></div>
     <div id="stage">
         <div id="narration"></div>
         <div id="subgraph" hidden>
             <div id="subgraph-handle">
                 <button id="subgraph-close">Close</button>
             </div>
-            <img id="subgraph-image">
+            <div id="subgraph-chart"></div>
         </div>
     </div>
     <div id="caption"></div>
@@ -133,24 +244,24 @@
 
         // establish captions as const so i don't need to search for them to change them
         const captions = {
-            bubblePrompt: "Click on a year to isolate it, or the highlighted neighborhood to see the changes in crime levels.",
-            choroPrompt: "Click on the tenderloin for a more detailed breakdown.",
+            bubblePrompt: "Scroll around to see the changes in crime levels, or click on the highlighted Tenderloin to learn a more detailed breakdown of its crime levels over time.",
+            choroPrompt: "Click on the highlighted Tenderloin to see a full breakdown of the most common crime types.",
             bubbleByYear: {
-                all:    "When people talk about crime in San Francisco, they usually jump right to the Tenderloin (highlighted in this chart), but it's actually number <b>two</b> overall. There have been more police incidents in <i>The Mission</i> since 2018.",
+                all:    "When people talk about crime in San Francisco, they usually jump right to the Tenderloin (highlighted in this chart), but it's actually number <b>two</b> overall. There have been more police incidents in <i>The Mission</i> since 2018. This graph shows the amount of incidents in a specific neighborhood. (Color and size are scaled on the same variable to emphasize.)",
                 "2020": "The spread of COVID-19 causes a sudden drop in the amount of incidents as people are forced to stay inside.",
                 "2026": "At the time of writing this, this dataset only reaches until March 2026, so this year is mostly incomplete."
             },
             bubbleDefault:   "Generally, the notion holds true that downtown areas have more crime, as a result of many factors.",
-            bubbleSubgraph:     "This graph makes it even more clear how much crime dropped as a result of COVID, and also shows that the #2 crime alternates between <i>Assault</i> and <i>Other Miscellaneous</i>.<br>Did you expect burglary to be the most common crime in the Tenderloin? Click <b>Continue</b> to see what it is elsewhere.",
+            bubbleSubgraph:     "Interesting... this graph makes the dropoff in crime levels from COVID even more apparent, and also lets us see exactly what incidents tend to happen. Curious about other neighborhoods? Click on another to pull up a similar chart for a different neighborhood, or click <i>Continue</i> to see the most common crime type in SF by neighborhood.",
             choropleth:      "Actually, <i>every neighborhood</i> in SF has the same #1 crime by frequency! Everywhere from the heart of downtown to the outer edges all share the same most frequent incident type.",
-            choroplethSubgraph: "Looking at the treemap shows a more detailed breakdown-- including, as most would expect, that reports of drug use are quite high in the Tenderloin."
+            choroplethSubgraph: "Looking at the treemap shows a more detailed breakdown-- including, as most would expect, that reports of drug use are quite high in the Tenderloin. Curious about another neighborhood? Click on another to see the breakdown of crime in a different area, and see what differences you can find."
         };
 
         // set up shared svg
         const svg_width = 980;
         const svg_height = 560;
         const legend_width = 230;
-        const map_width = svg_width - legend_width;
+        const map_width = svg_width;  // map fills full width; legend overlays right edge
 
         const svg = d3.select("#stage").append("svg")
             .attr("viewBox", [0, 0, svg_width, svg_height]);
@@ -174,28 +285,32 @@
         const narration = d3.select("#narration");
         const caption = d3.select("#caption");
         const controls = d3.select("#controls");
+        const tooltip  = d3.select("#tooltip");
 
         // subgraph helpers for the click-through visualizations
         const subgraph = d3.select("#subgraph");
         const subgraphEl = subgraph.node();
-        const subgraphImage = d3.select("#subgraph-image");
         const stageEl = d3.select("#stage").node();
         d3.select("#subgraph-close").on("click", closeSubgraph);
 
         // load and store captions for opening subgraph
         let savedCaption = null;
-        function openSubgraph(src, subgraphCaptionHtml) {
-            subgraphImage.attr("src", src);
+        function openSubgraph(renderFn, subgraphCaptionHtml) {
+            d3.select("#subgraph-chart").html("");
+            // only snapshot the caption if the panel is currently closed; switching
+            // neighborhoods while open would otherwise overwrite the saved base caption
+            const wasHidden = subgraph.attr("hidden") !== null;
             subgraph.attr("hidden", null);
+            renderFn();
             if (subgraphCaptionHtml !== undefined) {
-                savedCaption = caption.html();
+                if (wasHidden) savedCaption = caption.html();
                 caption.html(subgraphCaptionHtml);
             }
         }
 
         function closeSubgraph() {
             subgraph.attr("hidden", "");
-            subgraphImage.attr("src", null);
+            d3.select("#subgraph-chart").html("");
             subgraphEl.style.left = "";
             subgraphEl.style.top = "";
             subgraphEl.style.transform = "";
@@ -257,7 +372,7 @@
                 d["Incident Category"]     && d["Incident Category"].trim()     !== ""
             );
 
-            // precompute year-by-neighborhood counts so each year uses the same bubble scale
+            // precompute values to use constant scale per year on bubble map
             const yearByNeighborhood = d3.rollup(
                 validRows,
                 v => v.length,
@@ -289,6 +404,10 @@
                 closeSubgraph();
                 // reset pan/zoom on stage change
                 svg.call(zoom.transform, d3.zoomIdentity);
+                // toggle palette class on body so css palette rules activate
+                d3.select("body")
+                    .classed("stage-bubble",     name === "bubble")
+                    .classed("stage-choropleth", name === "choropleth");
                 if (name === "title")      showTitle();
                 if (name === "bubble")     showBubble();
                 if (name === "choropleth") showChoropleth();
@@ -299,8 +418,8 @@
                 narration.html(`
                     <h1>SF Crime on the Map</h1>
                     <h2>by Pika Macchi</h2>
-                    <p>Lots of people <i>think</i> they know a lot about crime in San Francisco, but politically motivated propaganda and a lack of boots-on-the-ground experience means a lot of people don't know as much as they think.
-                        <br>This project will tell an expanded story of the crime in San Francisco, giving a deeper insight into the breakdown of what exactly happens, and how it varies.</p>
+                    <h3>Lots of people <i>think</i> they know a lot about crime in San Francisco, but politically motivated propaganda and a lack of boots-on-the-ground experience means a lot of people don't know as much as they think.
+                        <br>This project will tell an expanded story of the crime in San Francisco, giving a deeper insight into the breakdown of what exactly happens, and how it varies.</h3>
                 `);
                 controls.append("button")
                     .text("Begin")
@@ -384,13 +503,18 @@
                 uiLayer.append("text")
                     .attr("class", "map-title")
                     .attr("x", map_width / 2)
-                    .attr("y", 22)
+                    .attr("y", 35)
                     .attr("text-anchor", "middle")
                     .text("Total Crime Incidents by Neighborhood");
 
-                // legend
+                // legend — overlays right edge of map with white background
                 const legendG = uiLayer.append("g")
-                    .attr("transform", `translate(${map_width + 10}, 50)`);
+                    .attr("transform", `translate(${svg_width - legend_width - 5}, 50)`);
+
+                legendG.append("rect")
+                    .attr("x", -8).attr("y", -20)
+                    .attr("width", legend_width - 10).attr("height", 200)
+                    .attr("fill", "#ffeded").attr("fill-opacity", 0.92);
 
                 legendG.append("text")
                     .attr("class", "legendTitle")
@@ -425,31 +549,77 @@
                     y_offset += r * 2 + 14;
                 });
 
-                // highlight tenderloin
-                const tenderloin = geo.features.find(f => f.properties.nhood === "Tenderloin");
-                if (tenderloin) {
-                    overlayLayer.append("path")
-                        .datum(tenderloin)
-                        .attr("d", path)
-                        .attr("fill", "#ff3366")
-                        .attr("fill-opacity", 0.25)
-                        .attr("stroke", "#ff3366")
-                        .attr("stroke-width", "3px")
-                        .style("cursor", "pointer")
-                        .on("click", () => openSubgraph("images/linegraphTableau.png", `<p>${captions.bubbleSubgraph}</p>`));
-                }
+                // highlight tenderloin and make every neighborhood clickable by area
+                overlayLayer.append("g")
+                    .selectAll("path")
+                    .data(geo.features)
+                    .join("path")
+                    .attr("d", path)
+                    .attr("fill",         d => d.properties.nhood === "Tenderloin" ? "#ff3366" : "transparent")
+                    .attr("fill-opacity", d => d.properties.nhood === "Tenderloin" ? 0.25 : 0)
+                    .attr("stroke",       d => d.properties.nhood === "Tenderloin" ? "#ff3366" : "none")
+                    .attr("stroke-width", d => d.properties.nhood === "Tenderloin" ? "3px" : "0")
+                    .style("cursor", "pointer")
+                    .on("click", (event, d) => {
+                        const name = d.properties.nhood;
+                        const isT  = name === "Tenderloin";
+                        openSubgraph(
+                            () => drawLineGraph(name),
+                            `<p>${isT ? captions.bubbleSubgraph : `Showing data for <b>${name}</b>.`}</p>`
+                        );
+                    })
+                    .on("mouseover", function(event, d) {
+                        const isT = d.properties.nhood === "Tenderloin";
+                        const hoverColor = document.body.classList.contains("stage-bubble") ? "#1f0202" : "#051630";
+                        d3.select(this)
+                            .attr("stroke",       isT ? "#cc0033" : hoverColor)
+                            .attr("stroke-width", isT ? "3px" : "1.5px");
+                        tooltip.style("display", "block").text(d.properties.nhood);
+                    })
+                    .on("mousemove", (event) => {
+                        tooltip.style("left", (event.clientX + 12) + "px")
+                               .style("top",  (event.clientY - 24) + "px");
+                    })
+                    .on("mouseout", function(event, d) {
+                        const isT = d.properties.nhood === "Tenderloin";
+                        d3.select(this)
+                            .attr("stroke",       isT ? "#ff3366" : "none")
+                            .attr("stroke-width", isT ? "3px" : "0");
+                        tooltip.style("display", "none");
+                    });
 
-                // year buttons and continue button
-                controls.html("");
-                const years = ["all", "2018", "2019", "2020", "2021", "2022", "2023", "2024", "2025", "2026"];
-                years.forEach(y => {
+                // year scrubber and continue button
+                // w3schools tutorial on js sliders used as reference: https://www.w3schools.com/howto/howto_js_rangeslider.asp
+                const yearValues = ["all", "2018", "2019", "2020", "2021", "2022", "2023", "2024", "2025", "2026"];
+                if (controls.select("#year-scrubber").empty()) {
+                    const scrubberDiv = controls.append("div")
+                        .style("display", "inline-block")
+                        .style("width", "600px");
+                    scrubberDiv.append("input")
+                        .attr("type", "range")
+                        .attr("id", "year-scrubber")
+                        .attr("min", 0)
+                        .attr("max", yearValues.length - 1)
+                        .attr("step", 1)
+                        .style("width", "100%")
+                        .on("input", function() { showBubble(yearValues[+this.value]); });
+                    scrubberDiv.append("div")
+                        .style("display", "flex")
+                        .style("justify-content", "space-between")
+                        .style("padding", "0 7px")
+                        .selectAll("span")
+                        .data(yearValues)
+                        .join("span")
+                        .attr("class", "label")
+                        .text(y => y === "all" ? "All" : y); // capitalize just "All"
                     controls.append("button")
-                        .text(y === "all" ? "All" : y)
-                        .on("click", () => showBubble(y));
-                });
-                controls.append("button")
-                    .text("Continue")
-                    .on("click", () => setStage("choropleth"));
+                        .style("margin-left", "20px")
+                        .text("Continue")
+                        .on("click", () => setStage("choropleth"));
+                }
+                // sync slider to current year
+                controls.select("#year-scrubber").property("value", yearValues.indexOf(year));
+                // end of citation
             }
 
             // STAGE: CHOROPLETH
@@ -496,14 +666,19 @@
                 uiLayer.append("text")
                     .attr("class", "map-title")
                     .attr("x", map_width / 2)
-                    .attr("y", 22)
+                    .attr("y", 35)
                     .attr("text-anchor", "middle")
                     .text("Most Common Crime Type by Neighborhood");
 
-                // legend
-                uiLayer.append("g")
+                // legend — overlays right edge of map with white background
+                const legendOrdinalG = uiLayer.append("g")
                     .attr("class", "legendOrdinal")
-                    .attr("transform", `translate(${map_width + 10}, 45)`);
+                    .attr("transform", `translate(${svg_width - legend_width - 5}, 45)`);
+
+                legendOrdinalG.append("rect")
+                    .attr("x", -8).attr("y", -22)
+                    .attr("width", legend_width - 10).attr("height", topCategories.length * 20 + 50)
+                    .attr("fill", "#edf4ff").attr("fill-opacity", 0.92);
 
                 const choroplethLegend = d3.legendColor()
                     .title("Most Common Crime")
@@ -514,21 +689,46 @@
                     .shapePadding(4)
                     .labelOffset(6);
 
-                uiLayer.select(".legendOrdinal").call(choroplethLegend);
+                legendOrdinalG.call(choroplethLegend);
 
-                // outline + fill the tenderloin so the whole area is clickable for the treemap
-                const tenderloin = geo.features.find(f => f.properties.nhood === "Tenderloin");
-                if (tenderloin) {
-                    overlayLayer.append("path")
-                        .datum(tenderloin)
-                        .attr("d", path)
-                        .attr("fill", "#ff3366")
-                        .attr("fill-opacity", 0.25)
-                        .attr("stroke", "#ff3366")
-                        .attr("stroke-width", "3px")
-                        .style("cursor", "pointer")
-                        .on("click", () => openSubgraph("images/treemapBreakdown.png", `<p>${captions.choroplethSubgraph}</p>`));
-                }
+                // highlight tenderloin and make every neighborhood clickable for the treemap
+                overlayLayer.append("g")
+                    .selectAll("path")
+                    .data(geo.features)
+                    .join("path")
+                    .attr("d", path)
+                    .attr("fill",         d => d.properties.nhood === "Tenderloin" ? "#ff3366" : "transparent")
+                    .attr("fill-opacity", d => d.properties.nhood === "Tenderloin" ? 0.25 : 0)
+                    .attr("stroke",       d => d.properties.nhood === "Tenderloin" ? "#ff3366" : "none")
+                    .attr("stroke-width", d => d.properties.nhood === "Tenderloin" ? "3px" : "0")
+                    .style("cursor", "pointer")
+                    .on("click", (event, d) => {
+                        const name = d.properties.nhood;
+                        const isT  = name === "Tenderloin";
+                        openSubgraph(
+                            () => drawTreemap(name),
+                            `<p>${isT ? captions.choroplethSubgraph : `Showing data for <b>${name}</b>.`}</p>`
+                        );
+                    })
+                    .on("mouseover", function(event, d) {
+                        const isT = d.properties.nhood === "Tenderloin";
+                        const hoverColor = document.body.classList.contains("stage-bubble") ? "#1f0202" : "#051630";
+                        d3.select(this)
+                            .attr("stroke",       isT ? "#cc0033" : hoverColor)
+                            .attr("stroke-width", isT ? "3px" : "1.5px");
+                        tooltip.style("display", "block").text(d.properties.nhood);
+                    })
+                    .on("mousemove", (event) => {
+                        tooltip.style("left", (event.clientX + 12) + "px")
+                               .style("top",  (event.clientY - 24) + "px");
+                    })
+                    .on("mouseout", function(event, d) {
+                        const isT = d.properties.nhood === "Tenderloin";
+                        d3.select(this)
+                            .attr("stroke",       isT ? "#ff3366" : "none")
+                            .attr("stroke-width", isT ? "3px" : "0");
+                        tooltip.style("display", "none");
+                    });
 
                 // back button to return to the bubble map
                 controls.html("");
@@ -536,6 +736,151 @@
                     .text("Back")
                     .on("click", () => setStage("bubble"));
             }
+
+            // line graph of top 5 categories over time for the given neighborhood
+            function drawLineGraph(neighborhood) {
+                const nRows = validRows.filter(d => d["Analysis Neighborhood"].trim() === neighborhood);
+
+                // top 5 categories by total count
+                const catTotals = d3.rollup(nRows, v => v.length, d => d["Incident Category"].trim());
+                const top5 = [...catTotals.entries()].sort((a, b) => b[1] - a[1]).slice(0, 5).map(d => d[0]);
+
+                const years = [...new Set(validRows.map(d => d["Incident Year"]))].sort();
+
+                // rollup by year and category for just the top 5
+                const byYearCat = d3.rollup(
+                    nRows.filter(d => top5.includes(d["Incident Category"].trim())),
+                    v => v.length,
+                    d => d["Incident Year"],
+                    d => d["Incident Category"].trim()
+                );
+
+                const series = top5.map(cat => ({
+                    name: cat,
+                    values: years.map(y => ({ year: +y, count: (byYearCat.get(y) || new Map()).get(cat) || 0 }))
+                }));
+
+                const margin = { top: 30, right: 140, bottom: 40, left: 55 };
+                const w = 660, h = 340;
+                const iw = w - margin.left - margin.right;
+                const ih = h - margin.top - margin.bottom;
+
+                const sg = d3.select("#subgraph-chart").append("svg")
+                    .attr("viewBox", [0, 0, w, h])
+                    .attr("width", "100%");
+
+                const g = sg.append("g").attr("transform", `translate(${margin.left},${margin.top})`);
+
+                const xScale = d3.scaleLinear().domain(d3.extent(years, y => +y)).range([0, iw]);
+                const yMax   = d3.max(series.flatMap(s => s.values.map(v => v.count)));
+                const yScale = d3.scaleLinear().domain([0, yMax]).nice().range([ih, 0]);
+                const color  = d3.scaleOrdinal(d3.schemeTableau10).domain(top5);
+
+                // grid lines
+                g.append("g")
+                    .call(d3.axisLeft(yScale).tickSize(-iw).tickFormat(""))
+                    .call(gg => gg.select(".domain").remove())
+                    .selectAll("line").style("stroke", "#e0e0e0");
+
+                // axes
+                g.append("g")
+                    .attr("transform", `translate(0,${ih})`)
+                    .call(d3.axisBottom(xScale).ticks(years.length).tickFormat(d3.format("d")));
+                g.append("g").call(d3.axisLeft(yScale));
+
+                // axis labels
+                g.append("text").attr("class", "label")
+                    .attr("text-anchor", "middle")
+                    .attr("x", iw / 2).attr("y", ih + 35)
+                    .text("Incident Year");
+                g.append("text").attr("class", "label")
+                    .attr("text-anchor", "middle")
+                    .attr("transform", "rotate(-90)")
+                    .attr("x", -ih / 2).attr("y", -44)
+                    .text("Count of Incident Category");
+
+                // one line per category
+                const line = d3.line().x(d => xScale(d.year)).y(d => yScale(d.count));
+                g.append("g")
+                    .selectAll("path")
+                    .data(series)
+                    .join("path")
+                    .attr("fill", "none")
+                    .attr("stroke", d => color(d.name))
+                    .attr("stroke-width", 2)
+                    .attr("d", d => line(d.values));
+
+                // legend
+                const legendG = sg.append("g").attr("transform", `translate(${w - margin.right + 10},${margin.top})`);
+                top5.forEach((cat, i) => {
+                    legendG.append("rect")
+                        .attr("y", i * 20).attr("width", 12).attr("height", 12)
+                        .attr("fill", color(cat));
+                    legendG.append("text").attr("class", "label")
+                        .attr("x", 16).attr("y", i * 20 + 10)
+                        .text(cat);
+                });
+
+                sg.append("text").attr("class", "map-title")
+                    .attr("text-anchor", "middle")
+                    .attr("x", w / 2).attr("y", 18)
+                    .text(`${neighborhood} — Top 5 Crime Categories over Time`);
+            }
+
+            // treemap of all crime categories for the given neighborhood
+            // d3.treemap() docs used as reference: https://d3js.org/d3-hierarchy/treemap
+            function drawTreemap(neighborhood) {
+                const nRows = validRows.filter(d => d["Analysis Neighborhood"].trim() === neighborhood);
+
+                // rollup to category counts and build hierarchy
+                const catCounts = d3.rollup(nRows, v => v.length, d => d["Incident Category"].trim());
+                const root = d3.hierarchy({
+                    name: "root",
+                    children: [...catCounts.entries()].map(([name, value]) => ({ name, value }))
+                }).sum(d => d.value).sort((a, b) => b.value - a.value);
+
+                const w = 660, h = 380;
+                d3.treemap().size([w, h - 30]).padding(2)(root);
+
+                // color scale, middle range of blues
+                const maxVal     = d3.max(root.leaves(), d => d.value);
+                const colorScale = d => d3.interpolateBlues(0.3 + 0.7 * (d / maxVal));
+
+                const sg = d3.select("#subgraph-chart").append("svg")
+                    .attr("viewBox", [0, 0, w, h])
+                    .attr("width", "100%");
+
+                sg.append("text").attr("class", "map-title")
+                    .attr("text-anchor", "middle")
+                    .attr("x", w / 2).attr("y", 20)
+                    .text(`${neighborhood} — Breakdown of Total Crime Type`);
+
+                const g = sg.append("g").attr("transform", "translate(0,28)");
+                const cell = g.selectAll("g")
+                    .data(root.leaves())
+                    .join("g")
+                    .attr("transform", d => `translate(${d.x0},${d.y0})`);
+
+                // rects
+                cell.append("rect")
+                    .attr("width",  d => d.x1 - d.x0)
+                    .attr("height", d => d.y1 - d.y0)
+                    .attr("fill",   d => colorScale(d.value))
+                    .attr("stroke", "#fff")
+                    .attr("stroke-width", 1);
+
+                // labels where there's room — white text overrides the .label fill
+                cell.filter(d => d.x1 - d.x0 > 60)
+                    .append("text").attr("class", "label").style("fill", "white")
+                    .attr("x", 4).attr("y", 14)
+                    .text(d => d.data.name);
+
+                cell.filter(d => d.x1 - d.x0 > 60 && d.y1 - d.y0 > 28)
+                    .append("text").attr("class", "label").style("fill", "white")
+                    .attr("x", 4).attr("y", 27)
+                    .text(d => d.value.toLocaleString());
+            }
+            // end citation
 
             // start at the title screen
             setStage("title");
